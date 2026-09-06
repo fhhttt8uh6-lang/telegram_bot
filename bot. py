@@ -1,0 +1,100 @@
+import os
+import asyncio
+import logging
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import yt_dlp
+
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+
+BOT_TOKEN = "8991634967:AAGrdvCcyQA6j31SwaxothC2yC-urqXAoss"
+ALLOWED_USER_ID = 8609094049
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ALLOWED_USER_ID:
+        await update.message.reply_text("عذراً، هذا البوت خاص ولا يمكنك استخدامه.")
+        return
+        
+    await update.message.reply_text(
+        "⚡ أهلاً بك في بوت التحميل المطور!\n"
+        "أرسل لي رابطاً من (YouTube, Facebook, TikTok, Instagram) وسأقوم بتحميله فوراً."
+    )
+
+def run_yt_dlp_download(url: str, output_dir: str) -> str:
+    ydl_opts = {
+        'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': f'{output_dir}/%(id)s.%(ext)s',
+        'merge_output_format': 'mp4',
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+        filename = ydl.prepare_filename(info)
+        
+        base, _ = os.path.splitext(filename)
+        expected_mp4 = f"{base}.mp4"
+        if os.path.exists(expected_mp4):
+            return expected_mp4
+        return filename
+
+async def handle_download(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ALLOWED_USER_ID:
+        return
+
+    url = update.message.text.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        await update.message.reply_text("❌ من فضلك أرسل رابطاً صحيحاً يبدأ بـ http أو https.")
+        return
+
+    status_msg = await update.message.reply_text("⏳ جاري معالجة الرابط وتحميل الفيديو...")
+    
+    download_dir = "downloads"
+    os.makedirs(download_dir, exist_ok=True)
+    file_path = None
+
+    try:
+        loop = asyncio.get_running_loop()
+        file_path = await loop.run_in_executor(None, run_yt_dlp_download, url, download_dir)
+        
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        if file_size_mb > 49.5:
+            await status_msg.edit_text(f"⚠️ حجم الفيديو ({file_size_mb:.1f} MB) يتجاوز حد تلجرام (50 MB).")
+            return
+
+        await status_msg.edit_text("⬆️ جاري رفع الفيديو إليك...")
+        
+        with open(file_path, 'rb') as video_file:
+            await update.message.reply_video(
+                video=video_file,
+                caption="✅ تم التحميل بنجاح!"
+            )
+            
+        await status_msg.delete()
+
+    except Exception as e:
+        await status_msg.edit_text(f"❌ حدث خطأ أثناء التحميل:\n`{str(e)}`", parse_mode="Markdown")
+
+    finally:
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception:
+                pass
+
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_download))
+
+    print("البوت يعمل الآن بنجاح...")
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
